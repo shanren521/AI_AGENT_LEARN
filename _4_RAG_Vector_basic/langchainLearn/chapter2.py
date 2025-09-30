@@ -1,3 +1,4 @@
+from pyexpat import model
 from langchain.chains import conversation
 from langchain.chat_models import ChatOpenAI, PromptTemplate, LLMChain
 from langchain.schema import HumanMessage, SystemMessage, AIMessage
@@ -5,9 +6,14 @@ from langchain.prompts.chat import ChatPromptTemplate, SystemMessagePromptTempla
 from langchain.agents import load_tools, initialize_agent, AgentType
 from langchain.memory import ConversationBufferMemory
 from langchain.chains.conversation.base import ConversationChain
+from langchain.schema.output_parser import StrOutputParser
+from langchain.output_parsers.openai_functions import JsonOutputFunctionsParser
+from langchain_core.prompts import MessagesPlaceholder
+from operator import itemgetter
+from langchain.schema.runnable import RunnableMap
+from langchain.llms.openai import OpenAI
 import os
 
-from langchain_core.prompts import MessagesPlaceholder
 
 
 # 代码1
@@ -87,7 +93,95 @@ def memory_component():
     conversation = ConversationChain(memory=memory, prompt=prompt, llm=llm)
     conversation.predict(input="hello, i am terry")
     
+# 管道符使用
+def use_pipe():
+    prompt = ChatPromptTemplate.from_template(f"tell me a joke about {topic}")
+    model = ChatOpenAI(openai_api_key="")
     
+    # 定义处理链
+    chain = prompt | model | StrOutputParser()
+    
+    # 调用处理链
+    response = chain.invoke({"foo": "bears"})
+
+
+# 提示词模板+模型包装器
+def prompt_model():
+    prompt = ChatPromptTemplate.from_template(f"tell me a joke about {topic}")
+    model = ChatOpenAI(openai_api_key="")
+    # 定义处理链
+    chain = prompt | model
+    # 调用处理链
+    response = chain.invoke({"foo": "bears"})
+    
+    chain =  prompt | model.bind(stop=["\n"])  # LLM生成文本并遇到换行符\n时，应该停止进一步文本生成
+    response = chain.invoke({"foo": "bears"})
+    
+    # bind方法同样支持OpenAI的函数调用
+    functions = [
+        {
+            "name": "joke",
+            "description": "A joke",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "setup": {
+                        "type": "string",
+                        "description": "The setup for the joke"
+                    },
+                    "punchline": {
+                        "type": "string",
+                        "description": "The punchline for the joke"
+                    }
+                },
+                "required": ["setup", "punchline"]
+            }
+        }
+    ]
+    
+    chain = prompt | model.bind(function_call={"name": "joke"}, functions=functions)
+    response = chain.invoke({"foo": "bears"}, config={})
+    
+# 提示词模板+模型包装器+输出解析器
+def prompt_model_parser():
+    chain = prompt | model | StrOutputParser()
+    response = chain.invoke({"foo": "bears"), config={})
+    # 对函数进行解析
+    chain = (prompt | model.bind(function_call={"name": "joke"},
+                                 functions=functions)
+             | JsonOutputFunctionsParser())
+    response = chain.invoke({"foo": "bears"})
+    
+
+# 多功能组合链
+def multi_chain():
+    prompt1 = ChatPromptTemplate.from_template(f"what is the city {person} is from?")
+    prompt2 = ChatPromptTemplate.from_template(f"what country is the city {city} in? respond in {language}")
+    chain1 = prompt1 | model | StrOutputParser()
+    chain2 = {
+        {"city": chain1, "language": itemgetter("language")}
+        | prompt2
+        | model
+        | StrOutputParser()
+    }
+    chain2.invoke({"person": "obama", "language": "spanish"})
+    
+    # 更复杂的组合链
+    prompt1 = ChatPromptTemplate.from_template("generate a random color")
+    prompt2 = ChatPromptTemplate.from_template(f"what is a fruit of color: {color}")
+    prompt3 = ChatPromptTemplate.from_template(f"what is countries flag that has the color: {color}")
+    prompt4 = ChatPromptTemplate.from_template(f"what is the color of {fruit} and {country}")
+    chain1 = prompt1 | model | StrOutputParser()
+    chain2 = RunnableMap(steps={"color": chain1}) | {"fruit": prompt2 | model | StrOutputParser(),
+                                                     "country": prompt3 | model | StrOutputParser()
+                                                     } | prompt4
+    
+    
+    
+    
+    
+
+
     
 if __name__ == "__main__":
     
