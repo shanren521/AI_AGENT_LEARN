@@ -92,6 +92,28 @@
   + LLM模型包装器：输入通常是单一的字符串提示词prompt，LLM模型包装器主要用于文本任务
   + 聊天模型包装器：输入则是聊天消息。每条消息都有role、content，返回内容包含在AIMessage
 + 2、输出的区别
-  + 
+  + LLM模型包装器：输出是一个字符串，是对提示词的补全，predict方法
+  + 聊天模型包装器：输出是聊天消息AIMessage，是对输入消息的响应，predict messages
+
+### 3.2.2 LLM模型包装器
+
++ `from langchain.llm.openai import OpenAI\n OpenAI.openai_api_key=""\n llm=OpenAI() llm("Tell me a joke")`
+
+### 3.2.3 聊天模型包装器
+
++ chapter3.py 聊天模型包装器
+
+## 3.3 模型I/O功能之提示词模板
+
+### 3.3.1 什么是提示词模板
+
+  由提示词模板PromptTemplate生成的，可复制、可重用的工具，其中包含占位符，可被动态替换成实际用户输入的内容，可以插入变量、表达式或函数的结果
+  提示词模板提供了format和format_prompt方法，输出可以是字符串、消息列表，以及ChatPromptValue形式， 对于LLM模型包装器，提示词模板会使用to_string方法将提示词转化为一个字符串，对于聊天模型包装器，提示词模板则会使用to_messages方法将提示词转化为消息列表
+
+### 3.3.2 提示词模板的输入和输出
+
++ 提示词模板的输入：内部数据(langchain内置的提示词)和外部数据(开发者自由添加的数据、用户的输入、历史记录、外部知识库、程序运行的上下文管理信息)
+  + chapter3.py 提示词模板的输入
+
 
 
