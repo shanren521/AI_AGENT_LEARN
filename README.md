@@ -397,6 +397,130 @@ FAISS	C++/Python	Facebook 出品，本地库（非数据库），适合离线批
 └─────────────────┴────────────────────────────┘
 ```
 
+
+```
+tp=2 张量并行，2表示将层内的张量放到两张GPU卡上计算，单层参数量大FFN、Attention的情况
+
+pp=4 流水线并行 每个GPU负责若干层，像流水线一样依次处理, 模型层数多
+
+seed 设置固定值，可以复现结果，temperature>0才生效
+
+同步异步模型服务、单条\多条执行  
+
+引擎进程 转发进程  双层架构
+server进程：vllm/sglang推理引擎
+transfer进程：统一协议/请求改写/多模态处理/OpenAI风格兼容
+
+并行策略
+tp（Tensor Parallel）：单层张量切分，适合多卡同机
+pp（Pipeline Parallel / 多节点协同）：层切分或多节点流程化
+rank/head_ip：多节点时用于确定本节点身份和主节点地址
+显存与吞吐控制
+watermark（显存占用上限比例）：越高越容易吃满显存，吞吐高但 OOM 风险高
+max_model_len：上下文窗口长度，越大 KV Cache 压力越大
+max_num_seqs：同时活跃请求上限（并发槽位）
+num_batched/max-num-batched-tokens：一个调度步允许处理的总 token 数，直接影响吞吐与尾延迟
+调度机制
+chunked prefill：长 prompt 分块预填，提升长上下文效率
+prefix cache/radix cache：共享前缀缓存，减少重复计算
+scheduler 保守性/预填上限：控制公平性与吞吐平衡
+
+调参建议（实战向）
+先稳后快：watermark=0.85~0.9 起步，观察 OOM 再加
+吞吐优先：增大 max_num_seqs + num_batched，但要监控 P99 延迟
+长文本优先：开 chunked prefill，max_model_len 与显存一起评估
+多节点场景：先保证 rank/head_ip/nnodes 正确，再调性能
+排障顺序：先看 transfer 是否 ready，再看 server 是否 ready，再看采样参数合法性
+
+
+
+vllm 核心技术是PagedAttention
+SGLang 是专为复杂 LLM 程序设计的推理框架，支持结构化生成和高效的 RadixAttention KV Cache 复用
+
+
+三、vLLM vs SGLang 核心区别
+📊 全面对比表
+对比维度	vLLM	SGLang
+核心技术	PagedAttention	RadixAttention
+KV Cache	分页管理	前缀树复用（Radix Tree）
+结构化生成	基础支持	原生深度支持
+多轮对话	一般	优秀（共享前缀复用）
+吞吐量	高	更高（复杂场景）
+首 token 延迟	一般	较低
+生态成熟度	非常成熟	较新但快速发展
+社区支持	非常活跃	活跃
+模型支持	极广	主流模型
+部署复杂度	简单	简单
+DP 支持	有限	原生支持
+编程接口	REST API	REST API + Python DSL
+
+
+KV Cache管理
+vLLM:  PagedAttention
+       → 将 KV Cache 分成固定大小的 Page
+       → 解决内存碎片问题
+       → 适合独立请求的高并发
+
+SGLang: RadixAttention
+        → 用前缀树（Radix Tree）管理 KV Cache
+        → 相同前缀的请求自动复用 Cache
+        → 适合多轮对话/共享系统提示的场景
+        
+适用场景
+✅ 选 vLLM 的场景：
+   - 需要广泛模型支持
+   - 单轮问答、独立请求为主
+   - 追求生产稳定性
+   - 需要丰富的量化支持
+
+
+✅ 选 SGLang 的场景：
+   - 多轮对话、Agent 应用
+   - 结构化输出（JSON/正则约束）
+   - 大量请求共享相同 system prompt
+   - 需要复杂推理流程编排
+   
+生产部署建议
+📌 显存分配建议：
+   vLLM:   --gpu-memory-utilization 0.85~0.90  [7]
+   SGLang: --mem-fraction-static 0.80~0.88
+
+📌 并行策略建议：
+   单机 8 卡：tp-size=8
+   双机 8 卡：tp-size=8, pp-size=2 或 tp-size=4, dp-size=4
+
+📌 长上下文场景：
+   vLLM:   --enable-chunked-prefill --enable-prefix-caching
+   SGLang: RadixAttention 默认开启前缀复用
+
+vllm serve {model_path} \
+    --host {host} \
+    --port {port} \
+    --dtype {dtype} \
+    --pipeline-parallel-size {pp} \
+    --tensor-parallel-size {tp} \
+    --trust-remote-code \
+    --enable-chunked-prefill \
+    --served-model-name {model_path} \
+    --max-model-len {max_model_len} \
+    --max-num-batched-tokens {num_batched} \
+    --max-num-seqs {max_num_seqs} \
+    --gpu-memory-utilization {watermark} \
+    --disable-custom-all-reduce"""
+    
+    
+一句话：当“单次请求的上下文不够”且“用户希望模型跨轮次保持一致”时，就需要记忆存储。
+常见需要记忆的业务场景：
+长期助手类产品：个人 AI 助手、企业 Copilot，需要记住用户偏好（语言风格、格式偏好、常用工具）。
+复杂多轮任务：如写作、代码迭代、方案评审，任务跨很多轮，不能每次把全部历史都塞进 prompt。
+客服/售后系统：要记住用户身份、订单、历史工单、之前承诺，避免每轮重复问。
+销售/运营跟进：需要持续记住客户画像、沟通阶段、异议点，保持话术连续性。
+教育辅导：记住学生薄弱点、进度、错误类型，才能做个性化教学。
+医疗/健康管理（合规前提）：记住病史、用药、过敏等关键事实。
+多智能体协作：多个 agent 需要共享任务状态、计划与中间结果。
+RAG 知识工作流：需要保存“检索过的关键片段 + 用户反馈”，用于后续检索优化。
+```
+
 # 性能优化清单
 | 场景       | 优化策略     | 代码要点                                   |
 | :------- | :------- | :------------------------------------- |
@@ -423,4 +547,8 @@ LCEL 统一了链式调用方式
 LangGraph 接管了状态管理和复杂 Agent 编排
 各模型集成拆包独立，按需安装，避免臃肿
 整体架构从"黑盒封装"走向"透明可控" 2
+
+
+
+
 

@@ -108,8 +108,67 @@ for循环获取模型流式返回，chunk.text
 
 **访问上下文**
 
+短期记忆（会话级）：近几轮摘要、当前任务状态（常放 Redis）
+长期记忆（用户级）：偏好、画像、历史关键事实（常放向量库+结构化库）
+所有的runtime都是ToolRuntime对象
+
 + 短期记忆: state 访问状态，Command更新代理的状态
++ memory(state):
+  + Access state 访问状态：工具可以通过 runtime.state 访问当前对话状态
+  + Update state 更新状态：使用 Command 更新代理的状态。这对于需要更新自定义状态字段的工具非常有用
 + Context: 上下文提供在调用时传递的不可变配置数据。可用于用户 ID、会话详细信息或在对话过程中不应更改的应用程序特定设置。runtime.context
++ 长期记忆：BaseStore 提供持久存储，可在会话之间保留数据。与状态（短期记忆）不同，保存到存储中的数据在以后的会话中仍然可用。
+  + 通过 runtime.store 访问数据存储。该数据存储使用命名空间/键模式来组织数据
++ Stream writer: 在工具执行过程中，实时传输工具的更新信息。使用 ToolRuntime().stream_writer 发出自定义更新
++ Execution info 执行信息：通过 runtime.execution_info 从工具内部访问线程 ID、运行 ID 和重试状态
++ Server info 服务信息：当您的工具在 LangGraph Server 上运行时，可通过 runtime.server_info 访问助手 ID、图 ID 和已验证用户
+
+
+**ToolNode工具节点**
+
++ Basic usage 基本用法：参考代码
++ Tool return values 工具返回值
+  + 返回一个string，返回值被转为ToolMessage，不会更改任何状态，模型识别后会决定下一步做什么
+  + 返回一个object，将对象系列化并作为工具输出发送回去，不会直接更改图状态，模型可以读取特定字段进一步处理
+  + 返回一个带有可选消息的Command，使用update更新状态，对于可能被并行工具调用更新的字段，使用reducer
+    + 当工具需要更新图状态（例如，设置用户偏好或应用状态）时，返回一个 Command 。您可以返回一个包含或不包含 ToolMessage Command 。
+    + 如果模型需要确认工具操作成功（例如，确认偏好设置更改），请在更新中包含 ToolMessage ，并使用 runtime.tool_call_id 作为 tool_call_id 参数。
++ Error handing 错误处理：配置工具错误的处理方式。
++ Route with tools_condition 使用tools_condition进行路由：使用 tools_condition 根据 LLM 是否发出工具调用进行条件路由
++ State injection 状态注入: 工具可以通过 ToolRuntime 访问当前图状态
+
+**Prebuild tools 预构建工具**
++ LangChain 提供了一系列预构建的工具和工具包，用于执行诸如网页搜索、代码解析、数据库访问等常见任务。这些即用型工具可以直接集成到您的代理中，无需编写自定义代码。
+
+**Server-side tool use  服务器端工具的使用**
++ 某些聊天模型内置了一些工具，这些工具由模型提供商在服务器端执行。这些工具包括网页搜索和代码解释器等功能，无需您定义或托管工具逻辑。
+
+### 1.5 Short-term memory 短期记忆
+
+**Usage 用法**
+要向代理添加短期记忆（线程级持久性），需要在创建代理时指定 checkpointer
+
++ In production在生产中: 使用由数据库支持的检查点
+
+**Customizing agent memory  自定义代理内存**
+
+代理使用 AgentState 来管理短期记忆，特别是通过 messages 键来管理对话历史记录。自定义状态模式通过 state_schema 参数传递给 create_agent 函数。
+
+**Common patterns  常见模式**
+
+启用短期记忆后，长时间的对话可能会超出 LLM 的上下文窗口
+
++ 修剪消息：移除前N条或后N条消息
++ 删除消息：永久删除LangGraph状态中的消息, 要使 RemoveMessage 生效，您需要将状态键与 add_messages reducer 一起使用。
++ 消息摘要：将历史记录中的早期消息进行总结，并用摘要替换他们, 修剪或删除消息的问题在于，您可能会因消息队列的清理而丢失信息。
+  因此，一些应用程序会受益于更复杂的方法，例如使用聊天模型来汇总消息历史记录。SummarizationMiddleware 
++ 自定义策略：如消息过滤
+
+**Access memory 访问内存**
+
++ Tools工具
+  + 使用工具读取短期记忆：使用 runtime 参数（类型为 ToolRuntime ）访问工具中的短期记忆（状态）。
+
 
 
 
