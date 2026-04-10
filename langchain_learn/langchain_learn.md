@@ -287,26 +287,159 @@ class ToolStrategy(Generic[SchemaT]):
           handle_errors=False  # All errors raised)
       ```
 
+## 2 middleware 中间件
+中间件提供了一种更严格控制代理内部发生事情的方法。中间件适用于以下用途: 
++ 通过日志记录、分析和调试跟踪代理行为。
++ 转换prompts、 工具选择和输出格式。
++ 增加了重试 、 后备和提前终止逻辑。
++ 应用速率限制 、保护栏和个人身份识别（PII）检测 。
+
+通过传递给 create_agent 添加中间件
+```python
+from langchain.agents import create_agent
+from langchain.agents.middleware import SummarizationMiddleware, HumanInTheLoopMiddleware
+
+agent = create_agent(
+    model="gtp-4.1",
+    tools=[...],
+    middleware=[
+        SummarizationMiddleware(...),
+        HumanInTheLoopMiddleware(...)
+    ]
+)
+```
+
+### 2.1 Overview 概述
+
+**The agent loop  智能体循环**
+核心代理循环包括调用模型，让模型选择执行工具，然后在调用工具不复存在时完成
+
+中间件在每一步之前和之后都暴露了钩子
+
+**Additional resources  附加资源**
++ 内置中间件
++ 自定义中间件
+
+### 2.2 内置中间件
+LangChain 和 Deep Agents 为常见场景提供了预构建的中间件
+
+**与提供者无关的中间件**
++ Summarization  摘要: 当接近token限制时，自动总结历史对话
++ Human-in-the-loop  人机参与: 暂停执行以供人工批准工具调用。
++ Model call limit  模型呼叫限制: 限制模型调用次数，以防止过高成本。
++ Tool call limit  工具调用限制: 通过限制呼叫次数来控制工具执行。
++ Model fallback  模型的备选: 当主模式失败时，会自动回退到其他模式。
++ PII detection  PII 检测: 检测并处理个人身份信息（PII）。
++ To-do list  待办事项列表: 为客服人员配备任务规划和跟踪能力。
++ LLM tool selector  LLM 工具选择器: 在调用主模型之前，先用 LLM 选择相关工具。
++ Tool retry  工具重试: 用指数回撤自动重试失败的工具调用。
++ Model retry  模型重试: 自动用指数退回方式重试失败的模型调用。
++ LLM tool emulator  LLM 工具仿真器: 用 LLM 模拟工具执行以进行测试。
++ Context editing  上下文编辑: 通过修剪或清理工具使用来管理对话上下文。
++ Shell tool  壳体工具: 向代理开放一个持久的壳会话以执行命令。
++ File search  文件搜索: 在文件系统文件上提供 Glob 和 Grep 搜索工具。
++ Filesystem  文件系统: 为代理提供存储上下文和长期记忆的文件系统。
++ Subagent  副代理人: 增加生成子代理人的能力。
+
+**Summarization  摘要**
+当接近token限制时自动总结对话历史，保留近期消息同时压缩旧上下文。摘要适用于以下情况:
++ 长时间的对话超出上下文窗口。
++ 多回合对话，历史悠久。
++ 在保持完整对话上下文的重要应用中。
+
+```python
+from langchain.agents import create_agent
+from langchain.agents.middleware import SummarizationMiddleware
+
+agent = create_agent(
+    model="gpt-4.1",
+    tools=[your_weather_tool, your_calculator_tool],
+    middleware=[
+        SummarizationMiddleware(
+            model="gpt-4.1-mini",
+            trigger=("tokens", 4000),
+            keep=("messages", 20),
+        ),
+    ],
+)
+```
+
+**Human-in-the-loop  人机参与**
+在执行工具调用前，暂停执行，以便人工批准、编辑或拒绝。 人机介入有助于以下用途:
++ 需要人工批准的高风险操作（例如数据库写入、金融交易）。
++ 必须有人监督的合规工作流程。
++ 长期对话，人工反馈引导经纪人。
+
+```python
+from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import InMemorySaver
+
+def your_read_email_tool(email_id: str) -> str:
+    """Mock function to read an email by its ID."""
+    return f"Email content for ID: {email_id}"
+
+def your_send_email_tool(recipient: str, subject: str, body: str) -> str:
+    """Mock function to send an email."""
+    return f"Email sent to {recipient} with subject '{subject}'"
+
+agent = create_agent(
+    model="gpt-4.1",
+    tools=[your_read_email_tool, your_send_email_tool],
+    checkpointer=InMemorySaver(),
+    middleware=[
+        HumanInTheLoopMiddleware(
+            interrupt_on={
+                "your_send_email_tool": {
+                    "allowed_decisions": ["approve", "edit", "reject"],
+                },
+                "your_read_email_tool": False
+            }
+        )
+    ]
+)
+```
+
+**Model call limit  模型调用限制**
+限制模型调用次数，以防止无限循环或过高成本。模型调用限制适用于以下情况：
++ 防止失控代理调用过多 API。
++ 对生产部署实施成本控制。
++ 在特定调用预算内测试agent行为。
+
+**Tool call limit  工具调用限制**
+通过限制工具调用次数来控制代理执行，无论是全局调用所有工具还是针对特定工具。工具调用限制适用于以下情况: 
++ 防止对昂贵外部 API 的过度调用。
++ 限制网络搜索或数据库查询。
++ 对特定工具使用强制执行速率限制。
++ 防止失控的代理循环。
+
+**Model fallback  模型的备选**
+当主模型失败时，自动回退到其他模型。模型的备援适用于以下情况:
++ 构建能够处理模型故障的韧性代理。
++ 通过回归更便宜的模型来优化成本。
++ OpenAI、Anthropic 等平台的提供者冗余。
+
+**PII detection  PII 检测**
+利用可配置策略检测并处理对话中的个人身份信息（PII）。PII 检测适用于以下情况:
++ 医疗保健和金融应用，要求合规。
++ 需要清理日志的客服人员。
++ 任何处理敏感用户数据的应用程序。
 
 
 
-    
+
+
+
+
+
+
+
+
+
+
+
 
 使用结构化输出时，不支持预绑定模型（已调用 bind_tools 的模型）。如果需要使用结构化输出进行动态模型选择，请确保传递给中间件的模型未预先绑定。
 使用wrap_model_call实现
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
