@@ -168,6 +168,132 @@ for循环获取模型流式返回，chunk.text
 
 + Tools工具
   + 使用工具读取短期记忆：使用 runtime 参数（类型为 ToolRuntime ）访问工具中的短期记忆（状态）。
+  + 从工具写入短期记忆：要在执行期间修改代理的短期记忆（状态），您可以直接从工具返回状态更新。
+
+**Prompt**
+在中间件中访问短期记忆（状态），以根据对话历史记录或自定义状态字段创建动态prompts。
+
+**Before model**
+在 @before_model 中间件中访问短期记忆（状态）以在模型调用之前处理消息。
+
+**After model**
+在 @after_model 中间件中访问短期记忆（状态），以便在模型调用后处理消息。
+
+
+### 1.6 Streaming 流媒体
+
+能实现的功能：
++ 流式传输代理进度：在代理的每个步骤之后获取状态更新。
++ 流式LLM tokens：在生成时流式输出tokens
++ 流式思考/推理：作为模型推理的表面生成
++ 流式自定义更新：发出用户定义的信号
++ 流式传输多种模式：可选择updates(代理进度)、messages(LLM tokens + metadata)、自定义(任意用户数据)
+
+**Supported stream modes  支持的流模式**
+将以下一种或多种流模式作为列表传递给 stream 或 astream 方法(updates\messages\custom)
+
+**Agent progress  代理进度**
+要流式传输代理进度，请使用 stream 或 astream 方法，并将 stream_mode="updates" 。这样会在代理执行每个步骤后发出一个事件。
+
+**LLM tokens**
+要实时传输 LLM 生成的令牌，请使用 stream_mode="messages", 和API 的stream=True相同
+
+**Custom updates  自定义更新**
+要从正在执行的工具中流式传输更新，可以使用 get_stream_writer 。
+
+**Stream multiple modes  流式多模式**
+你可以通过传递流模式列表来指定多个流模式： stream_mode=["updates", "custom"] 。
+每个流式传输的数据块都是一个 StreamPart 字典，包含 type 、 ns 和 data 三个键。使用 chunk["type"] 确定流模式，使用 chunk["data"] 访问有效负载。
+
+**Common patterns  常见模式**
+
++ Streaming thinking/reasoning tokens 流式思维/推理tokens:通过筛选 type 为 "reasoning"获取内容(stream_mode="messages")
++ Streaming tool calls 流式工具调用: 指定 stream_mode="messages" 将流式传输代理中所有 LLM 调用生成的增量消息块 。要访问已解析工具调用的完整消息
++ Accessing completed messages 访问已完成的消息: 在某些情况下，已完成的消息不会反映在状态更新中。如果您有权访问代理内部机制，则可以使用自定义更新在流式传输期间访问这些消息。否则，您可以在流式传输循环中聚合消息块
++ Streaming with human-in-the-loop 人机交互式流媒体: 处理人机交互中断
++ Streaming from sub-agents 流式子代理: 当代理中存在多个 LLM 时，通常需要在生成消息时消除消息来源的歧义。为此，在创建每个代理时，需要为其指定一个 name 。然后，在 "messages" 模式下进行流式传输时，可以通过元数据中的 lc_agent_name 键获取此名称。
+
+**Disable streaming  禁用流媒体**
+在某些应用场景中，您可能需要禁用特定模型的单个令牌流式传输。这在以下情况下非常有用：
++ 利用多智能体系统来控制哪些智能体输出其内容
++ 将支持流媒体的模型与不支持流媒体的模型混合使用。
++ 部署到 LangSmith 平台 ，并希望阻止某些模型输出流式传输到客户端
+
+**v2 streaming format  v2 流媒体格式**
+将 version="v2" 传递给 stream() 或 astream() 可获得统一的输出格式。每个数据块都是一个 StreamPart 字典，包含 type 、 ns 和 data 三个键——无论流模式或模式数量如何，其结构都相同
+
+v2 格式还改进了 invoke() 方法——它返回一个带有 .value 和 .interrupts 属性的 GraphOutput 对象，将状态与中断元数据清晰地分离
+
+
+### 1.7 Structured output  结构化输出
+结构化输出允许代理以特定且可预测的格式返回数据。
+
+LangChain 的 create_agent 可以自动处理结构化输出。用户设置所需的结构化输出模式，当模型生成结构化数据时，这些数据会被捕获、验证，然后返回到 agent 状态的 'structured_response' 键中。
+
+**Response format  回复格式**
+使用 response_format 控制代理返回结构化数据的方式：
++ ToolStrategy[StructuredResponseT] ：使用工具调用进行结构化输出
++ ProviderStrategy[StructuredResponseT] ：使用提供商原生结构化输出
++ type[StructuredResponseT] ：模式类型 - 根据模型功能自动选择最佳策略
++ None ：未明确请求结构化输出
+
+**Provider strategy  供应商策略**
+要使用此策略，请配置 ProviderStrategy
+```python
+class ProviderStrategy(Generic[SchemaT]):
+    schema: type[SchemaT]
+    strict: bool | None = None
+```
+
+**Tool calling strategy  工具调用策略**
+对于不支持原生结构化输出的模型，LangChain 使用工具调用来实现相同的结果。这适用于所有支持工具调用的模型（大多数现代模型）。
+```python
+class ToolStrategy(Generic[SchemaT]):
+    schema: type[SchemaT]
+    tool_message_content: str | None
+    handle_errors: Union[
+        bool,
+        str,
+        type[Exception],
+        tuple[type[Exception], ...],
+        Callable[[Exception], str],
+    ]
+```
+
++ Custom tool message content 自定义工具消息内容: tool_message_content 参数允许您自定义生成结构化输出时显示在对话历史记录中的消息
++ Error handling  错误处理: 模型在通过工具调用生成结构化输出时可能会出错。LangChain 提供智能重试机制来自动处理这些错误。
+  + 多重结构化输出错误: 当模型错误地调用多个结构化输出工具时，代理会在 ToolMessage 中提供错误反馈，并提示模型重试
+  + Schema validation error  架构验证错误: 当结构化输出与预期模式不符时，代理会提供具体的错误反馈
+  + Error handling strategies 错误处理策略: 可以使用 handle_errors 参数自定义错误处理方式
+    + ```python 
+      # Custom error message:  自定义错误信息
+      ToolStrategy(
+          schema=ProductRating,
+          handle_errors="Please provide a valid rating between 1-5 and include a comment.")
+      
+      # Handle specific exceptions only: 仅处理特定异常情况
+      ToolStrategy(
+          schema=ProductRating,
+          handle_errors=ValueError  # Only retry on ValueError, raise others)
+      
+      # Handle multiple exception types:处理多种异常类型
+      ToolStrategy(
+          schema=ProductRating,
+          handle_errors=(ValueError, TypeError)  # Retry on ValueError and TypeError)
+      
+      # No error handling:  无错误处理
+      response_format = ToolStrategy(
+          schema=ProductRating,
+          handle_errors=False  # All errors raised)
+    ```
+
+
+
+
+
+
+
+
 
 
 

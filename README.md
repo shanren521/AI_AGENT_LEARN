@@ -549,6 +549,82 @@ LangGraph 接管了状态管理和复杂 Agent 编排
 整体架构从"黑盒封装"走向"透明可控" 2
 
 
+P0：生产必配（不建议省）
+--model：模型路径/名称；建议固定版本目录，避免漂移。
+--served-model-name：对外暴露模型名；方便灰度/多模型共存。
+--host --port：监听地址与端口；内网通常 0.0.0.0 + 固定端口。
+--dtype：bfloat16/float16；A100/H100 优先 bfloat16（更稳）。
+--tensor-parallel-size：TP 并行数；通常 = 单机 GPU 数（或其因子）。
+--pipeline-parallel-size：PP 并行数；超大模型跨节点常用。
+--gpu-memory-utilization：显存水位；建议先 0.88~0.92，压测后再升。
+--max-model-len：上下文长度上限；按业务真实需要设置，别盲目拉满。
+--max-num-seqs：单批并发序列上限；过大会抖动/爆显存。
+--max-num-batched-tokens：批总 token 上限；吞吐核心参数之一。
+--enable-chunked-prefill：长输入场景建议开启（吞吐和稳定性更好）。
+--trust-remote-code：仅在可信模型仓库开启；生产建议固定白名单。
+--seed：可复现排障时有用；稳定后可固定。
+--disable-log-stats（按需）：高 QPS 下可减日志开销。
+P1：并行与分布式（大规模集群常用）
+--data-parallel-size：DP 副本数（横向扩容核心）。
+--data-parallel-size-local：单机 DP 数，配合混合 LB。
+--data-parallel-hybrid-lb / --data-parallel-external-lb：选择内部/外部负载模式。
+--distributed-executor-backend：分布式后端（ray/mp 等，按集群形态选）。
+--all2all-backend：MoE/EP 场景通信后端。
+--dcp-comm-backend：上下文并行通信后端。
+--decode-context-parallel-size：DCP 大上下文优化。
+--nnodes --node-rank --master-addr --master-port：多机基础四件套。
+--pipeline-parallel-size + --tensor-parallel-size + --data-parallel-size：三维并行联合规划（TP×PP×DP）。
+P1：调度与吞吐（性能调优主战场）
+--scheduling-policy：调度策略（fcfs 等），影响尾延迟与公平性。
+--num-scheduler-steps（版本相关）：调度步长，影响吞吐/时延平衡。
+--enable-prefix-caching：高复用 prompt 场景强烈建议开。
+--prefix-caching-hash-algo：缓存命中与一致性策略。
+--max-num-partial-prefills / --max-long-partial-prefills：长输入切分并发控制。
+--long-prefill-token-threshold：长 prefill 判定阈值。
+--enable-dbo + --dbo-prefill-token-threshold + --dbo-decode-token-threshold：decode/prefill 优化策略。
+--stream-interval：流式返回粒度，影响用户感知延迟。
+P1：内存/缓存安全（防 OOM 的关键）
+--kv-cache-dtype：KV 精度（auto/fp8 等，需结合模型验证）。
+--kv-cache-memory-bytes：显式约束 KV 内存预算。
+--cpu-offload-gb / --cpu-offload-params：显存不足时兜底。
+--swap-space（若版本支持）：CPU swap 空间。
+--block-size：KV block 粒度，影响碎片与吞吐。
+--num-gpu-blocks-override：高级手工控制（仅排障/专项调优用）。
+--disable-hybrid-kv-cache-manager：仅当排查特定问题时调整。
+--kv-offloading-backend / --kv-offloading-size：KV 下沉策略。
+P1：服务治理与安全
+--api-key：外部调用强制鉴权（至少网关或服务层有一处鉴权）。
+--allowed-origins --allowed-methods --allowed-headers：CORS 精确放行。
+--ssl-certfile --ssl-keyfile --ssl-ca-certs --ssl-cert-reqs：TLS/mTLS。
+--root-path：挂在网关子路径时必配。
+--disable-fastapi-docs：生产建议关文档页。
+--middleware：接鉴权、审计、限流、trace 注入。
+--h11-max-header-count --h11-max-incomplete-event-size：HTTP 头安全限制。
+--disable-uvicorn-access-log：超高 QPS 时减少 I/O 噪音（保留结构化业务日志）。
+P1：可观测与排障
+--enable-log-requests / --enable-log-outputs：谨慎开，注意隐私与成本。
+--max-log-len：日志截断，防止日志爆炸。
+--otlp-traces-endpoint：接入 OpenTelemetry。
+--collect-detailed-traces：性能定位时短期开启。
+--show-hidden-metrics-for-version：兼容观察。
+--aggregate-engine-logging：多进程日志聚合更易运维。
+P2：模型能力扩展（按业务开启）
+--enable-lora --lora-modules --max-loras --max-lora-rank：多租户 LoRA 服务。
+--quantization：INT4/AWQ/GPTQ 等量化部署。
+--speculative-config：投机解码加速。
+--reasoning-parser / --reasoning-config：推理模型输出结构化。
+--tool-call-parser --enable-auto-tool-choice：Agent/tool calling。
+--limit-mm-per-prompt：多模态输入限制（防滥用和显存冲击）。
+--mm-processor-cache-gb --mm-processor-cache-type：多模态前处理缓存。
+--tokenizer --tokenizer-mode --tokenizer-revision：分词器版本固定。
+生产建议的“参数治理”方式（很重要）
+分层配置：base（通用）+ model（模型特定）+ env（机房/集群）。
+版本锁定：固定 vLLM 版本 + 模型 revision + tokenizer revision。
+容量压测三指标：P99 延迟、吞吐、OOM 率；每次变更都要回归。
+灰度发布：新参数先小流量（5%→20%→50%→100%）。
+回滚预案：保留上一个稳定参数模板，一键切回。
+
+
 
 
 
