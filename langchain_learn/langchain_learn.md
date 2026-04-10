@@ -285,18 +285,12 @@ class ToolStrategy(Generic[SchemaT]):
       response_format = ToolStrategy(
           schema=ProductRating,
           handle_errors=False  # All errors raised)
-    ```
+      ```
 
 
 
 
-
-
-
-
-
-
-
+    
 
 使用结构化输出时，不支持预绑定模型（已调用 bind_tools 的模型）。如果需要使用结构化输出进行动态模型选择，请确保传递给中间件的模型未预先绑定。
 使用wrap_model_call实现
