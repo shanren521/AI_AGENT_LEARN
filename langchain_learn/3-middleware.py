@@ -1,38 +1,39 @@
 from langchain.agents import create_agent, AgentState
-from langchain.agents.middleware import (ModelCallLimitMiddleware, ToolCallLimitMiddleware, ModelFallbackMiddleware, PIIMiddleware)
-from langchain.agents.middleware.types import ResponseT, StateT
+from langchain.agents.middleware import (ModelCallLimitMiddleware, ToolCallLimitMiddleware, ModelFallbackMiddleware,
+                                         PIIMiddleware)
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 from langgraph.graph.state import StateGraph
 from langchain.tools import tool, ToolRuntime
 from langgraph.runtime import Runtime
-from langchain.messages import AIMessage, SystemMessage, HumanMessage
+from langchain.messages import AIMessage, SystemMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 from langchain.chat_models import init_chat_model
 from langchain.agents.middleware import (wrap_model_call, ModelRequest, ModelResponse, before_model, after_model,
                                          SummarizationMiddleware, dynamic_prompt, after_agent, HumanInTheLoopMiddleware,
-                                         PIIMiddleware, TodoListMiddleware, LLMToolSelectorMiddleware, ToolRetryMiddleware,
-                                         LLMToolEmulator, ClearToolUsesEdit, ContextEditingMiddleware, ShellToolMiddleware,
-                                         HostExecutionPolicy, FilesystemFileSearchMiddleware, wrap_tool_call, ExtendedModelResponse,
+                                         PIIMiddleware, TodoListMiddleware, LLMToolSelectorMiddleware,
+                                         ToolRetryMiddleware,
+                                         LLMToolEmulator, ClearToolUsesEdit, ContextEditingMiddleware,
+                                         ShellToolMiddleware,
+                                         HostExecutionPolicy, FilesystemFileSearchMiddleware, wrap_tool_call,
+                                         ExtendedModelResponse,
                                          AgentMiddleware, hook_config)
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.subagents import SubAgentMiddleware, CompiledSubAgent, SubAgent
 from deepagents.backends import CompositeBackend, StateBackend, StoreBackend, FilesystemBackend
 from typing import Any, Callable, Annotated
-
-from langgraph.typing import ContextT
+from langchain.tools.tool_node import ToolCallRequest
 from typing_extensions import NotRequired
 import re
-
 
 """
 middleware 中间件
 """
 
-
 """
 Prebuilt middleware 预构建中间件
 """
+
 
 # **Model call limit  模型呼叫限制**
 def model_call_limit():
@@ -49,6 +50,7 @@ def model_call_limit():
         ]
     )
 
+
 # **Tool call limit  工具调用限制**
 def tool_call_limit(search_tool, database_tool):
     agent = create_agent(
@@ -63,6 +65,7 @@ def tool_call_limit(search_tool, database_tool):
             )
         ]
     )
+
 
 # **Model fallback  模型的备选**
 def model_fallback():
@@ -122,7 +125,7 @@ def pii_detection():
             ssn = match.group(0)
             # Validate: first 3 digits shouldn't be 000, 666, or 900-999
             first_three = int(ssn[:3])
-            if first_three not in [0, 666] and not(900 <= first_three <=999):
+            if first_three not in [0, 666] and not (900 <= first_three <= 999):
                 matches.append({'text': ssn, 'start': match.start(), 'end': match.end()})
 
     agent3 = create_agent(
@@ -144,6 +147,7 @@ def llm_tool_selector(tool1, tool2, tool3):
         ]
     )
 
+
 # **Tool retry  工具重试**
 def tool_retry(search_tool, database_tool):
     agent = create_agent(
@@ -153,6 +157,7 @@ def tool_retry(search_tool, database_tool):
             ToolRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0)
         ]
     )
+
 
 # **LLM tool emulator  LLM 工具模拟器**
 def tool_emulator(get_weather, search_database, send_email):
@@ -164,6 +169,7 @@ def tool_emulator(get_weather, search_database, send_email):
         ]
     )
 
+
 # **Context editing  上下文编辑**
 def context_editing():
     agent = create_agent(
@@ -174,6 +180,7 @@ def context_editing():
             ContextEditingMiddleware(edits=[ClearToolUsesEdit(trigger=100000, keep=3)])
         ]
     )
+
 
 # **Shell tool  Shell 工具**
 def shell_tool(search_tool):
@@ -188,6 +195,7 @@ def shell_tool(search_tool):
         ]
     )
 
+
 # **File search文件搜索**
 def file_search():
     agent = create_agent(
@@ -200,6 +208,7 @@ def file_search():
             )
         ]
     )
+
 
 # **Filesystem middleware  文件系统中间件**
 def file_system():
@@ -216,6 +225,7 @@ def file_system():
             )
         ]
     )
+
 
 # **Filesystem middleware  文件系统中间件**
 def filesystem_middleware():
@@ -237,6 +247,7 @@ def filesystem_middleware():
         ]
     )
 
+
 # **Subagent  次级代理人**
 def subagent():
     @tool
@@ -250,14 +261,15 @@ def subagent():
             root_dir="/workspace",
             virtual_mode=True,
         )
+
     sub_agent = SubAgent(
-            name="weather",
-            description="This subagent can get weather in cities.",
-            system_prompt="Use the get_weather tool to get the weather in a city.",
-            tools=[get_weather],
-            model="gpt-4.1",
-            middleware=[],
-        )
+        name="weather",
+        description="This subagent can get weather in cities.",
+        system_prompt="Use the get_weather tool to get the weather in a city.",
+        tools=[get_weather],
+        model="gpt-4.1",
+        middleware=[],
+    )
     subagent_middleware = SubAgentMiddleware(
         backend=make_backend,
         subagents=[sub_agent]
@@ -293,6 +305,7 @@ def subagent():
 Custom middleware  自定义中间件
 """
 
+
 # **Hooks 钩子**
 def hooks_demo():
     # 1 node-style hooks
@@ -300,16 +313,15 @@ def hooks_demo():
     def check_message_limit(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
         if len(state['messages']) >= 50:
             return {
-            "messages": [AIMessage("Conversation limit reached.")],
-            "jump_to": "end"
-        }
+                "messages": [AIMessage("Conversation limit reached.")],
+                "jump_to": "end"
+            }
         return None
 
     @after_model
     def log_response(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
         print(f"Model returned: {state['messages'][-1].content}")
         return None
-
 
     # 2 wrap-style hooks
     @wrap_model_call
@@ -324,6 +336,7 @@ def hooks_demo():
                 if attempt == 2:
                     raise
                 print(f"Retry {attempt + 1}/3 after error: {e}")
+
 
 # **State updates 状态更新**
 def state_updates():
@@ -364,9 +377,9 @@ def state_updates():
 
     class OuterMiddleware(AgentMiddleware):
         def wrap_model_call(
-            self,
-            request: ModelRequest,
-            handler: Callable[[ModelRequest], ModelResponse]
+                self,
+                request: ModelRequest,
+                handler: Callable[[ModelRequest], ModelResponse]
         ) -> ExtendedModelResponse:
             response = handler(request)
             return ExtendedModelResponse(
@@ -379,10 +392,11 @@ def state_updates():
 
     class InnerMiddleware(AgentMiddleware):
         """Adds trace_layer and message. Outer adds to same keys; trace_layer: outer wins, messages: additive."""
+
         def wrap_model_call(
-            self,
-            request: ModelRequest,
-            handler: Callable[[ModelRequest], ModelResponse],
+                self,
+                request: ModelRequest,
+                handler: Callable[[ModelRequest], ModelResponse],
         ) -> ExtendedModelResponse:
             response = handler(request)
             return ExtendedModelResponse(
@@ -392,6 +406,7 @@ def state_updates():
                     'messages': [SystemMessage(content='inner ran')]
                 })
             )
+
 
 # **Create middleware 创建中间件**
 def create_middleware():
@@ -449,6 +464,7 @@ def create_middleware():
         tools=[...]
     )
 
+
 # **Custom state schema  自定义状态模式**
 
 def custom_state_schema():
@@ -478,6 +494,7 @@ def custom_state_schema():
         'user_id': 'user_123'
     })
 
+
 # **Agent jumps 代理跳转**
 def agent_jumps():
     @after_model
@@ -491,6 +508,7 @@ def agent_jumps():
             }
 
         return None
+
 
 ## **Examples 示例**
 
@@ -538,6 +556,40 @@ def examples():
         tools=all_tools,
         middleware=[select_tools]
     )
+
+
+    # 4 Tool call monitoring  工具调用监控
+    def tool_call_monitor():
+        @wrap_tool_call
+        def monitor_tool(
+                request: ToolCallRequest,
+                handler: Callable[[ToolCallRequest], ToolMessage | Command]
+        ) -> ToolMessage | Command:
+            print(f"Executing tool: {request.tool_call['name']}")
+            print(f"Arguments: {request.tool_call['args']}")
+            try:
+                result = handler(request)
+                print("Tool completed successfully")
+                return result
+            except Exception as e:
+                print(f"Tool failed: {e}")
+                raise
+
+    # 5 Prompt caching (Anthropic) 提示缓存（Anthropic）
+    @wrap_model_call
+    def add_cached_context(
+            request: ModelRequest,
+            handler: Callable[[ModelRequest], ModelResponse]
+    ) -> ModelResponse:
+        new_context = list(request.system_message.content_blocks) + [
+            {
+                'type': 'text',
+                'text': 'Here is a large document to analyze:\n\n<document>...</document>',
+                'cache_control': {'type': 'ephemeral'}
+            }
+        ]
+        new_system_message = SystemMessage(content=new_context)
+        return handler(request.override(system_message=new_system_message))
 
 
 
