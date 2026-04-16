@@ -814,9 +814,11 @@ LangGraph 公开了一个 Runtime 对象，其中包含以下信息：
 
 ## 3.4 模型上下文协议（MCP）
 
+### 3.4.2 Quickstart 快速开始
 
+langchain-mcp-adapters 使代理能够使用在单个或多个 MCP 服务器上定义的工具。
 
-### 3.4.1 Custom servers 自定义服务器
+### 3.4.2 Custom servers 自定义服务器
 
 ## 
 
