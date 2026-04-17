@@ -1,11 +1,11 @@
 """Advanced usage 高级用法"""
 import asyncio
 from typing import Any, Callable
+from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from dataclasses import dataclass
 from langchain.agents import create_agent
 from langchain.messages import AIMessage, AnyMessage
-from langchain.agents.middleware.types import StateT
 from langchain.chat_models import init_chat_model
 from langchain.tools import tool, ToolRuntime
 from langchain_core.runnables import RunnableConfig
@@ -18,7 +18,6 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.runtime import Runtime
 from langgraph.store.memory import InMemoryStore
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.typing import ContextT
 
 """
 Built-in guardrails  内置防护机制
@@ -708,8 +707,86 @@ Quickstart  快速入门
 """
 
 def quickstart_demo():
+    async def main():
+        client = MultiServerMCPClient(
+            {
+                'math': {
+                    'transport': 'stdio',
+                    'command': 'python',
+                    'args': ['/path/to/math_server.py']
+                },
+                'weather': {
+                    'transport': 'http',
+                    'url': 'http://localhost:8000/mcp'
+                }
+            }
+        )
+        tools = await client.get_tools()
+        agent = create_agent(
+            model='',
+            tools=tools
+        )
+        math_response = await agent.ainvoke(
+            {'messages': [{'role': 'user', 'content': "what's (3 + 5) x 12?"}]}
+        )
+        weather_response = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": "what is the weather in nyc?"}]}
+        )
+        print(math_response)
+        print(weather_response)
+    asyncio.run(main())
 
+"""
+Custom servers  自定义服务器
+"""
 
+math_mcp = FastMCP('Math')
+def custom_example_demo():
+    @math_mcp.tool()
+    def add(a: int, b: int) -> int:
+        """Add two numbers."""
+        return a + b
+    @math_mcp.tool()
+    def multiply(a: int, b: int) -> int:
+        """Multiply two numbers."""
+        return a * b
+
+    math_mcp.run(transport='stdio')
+
+"""
+Transports 传输方式
+"""
+
+# HTTP
+async def http_transport_demo():
+    client = MultiServerMCPClient(
+        {
+            "weather": {
+                "transport": "http",
+                "url": "http://localhost:8000/mcp",
+            }
+        }
+    )
+
+    # 1.Passing headers  传递信息头
+    client = MultiServerMCPClient(
+        {
+            "weather": {
+                "transport": "http",
+                "url": "http://localhost:8000/mcp",
+                "headers": {
+                    "Authorization": "Bearer YOUR_TOKEN",
+                    "X-Custom-Header": "custom-value"
+                },
+            }
+        }
+    )
+    tools = await client.get_tools()
+    agent = create_agent('gpt-4.1', tools)
+    response = await agent.ainvoke({
+        'messages': {'role': 'user', 'content': 'what is the weather in nyc?'}})
+
+    #
 if __name__ == "__main__":
     access_demo()
 
