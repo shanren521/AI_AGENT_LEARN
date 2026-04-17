@@ -1,11 +1,12 @@
 """Advanced usage 高级用法"""
 import asyncio
+import json
 from typing import Any, Callable
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 from pydantic import BaseModel, Field
 from dataclasses import dataclass
 from langchain.agents import create_agent
-from langchain.messages import AIMessage, AnyMessage
+from langchain.messages import AIMessage, AnyMessage, ToolMessage
 from langchain.chat_models import init_chat_model
 from langchain.tools import tool, ToolRuntime
 from langchain_core.runnables import RunnableConfig
@@ -17,7 +18,16 @@ from langgraph.types import Command
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.runtime import Runtime
 from langgraph.store.memory import InMemoryStore
+from mcp.types import TextContent, LoggingMessageNotificationParams, ElicitRequestParams, ElicitResult
+from mcp.shared.context import RequestContext
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.interceptors import MCPToolCallRequest
+from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_mcp_adapters.resources import load_mcp_resources
+from langchain_mcp_adapters.prompts import load_mcp_prompt
+from langchain_mcp_adapters.callbacks import Callbacks, CallbackContext
+
+
 
 """
 Built-in guardrails  内置防护机制
@@ -261,13 +271,14 @@ Model context  模型上下文
 
 
 @dataclass
-class Context:
+class CustomContext:
     user_id: str
     user_role: str
     deployment_env: str
     user_jurisdiction: str
     industry: str
     compliance_frameworks: list[str]
+    api_key: str
 
 # System Prompt系统提示
 def system_prompt_demo():
@@ -306,7 +317,7 @@ def system_prompt_demo():
         model='',
         tools=[...],
         middleware=[store_aware_prompt],
-        context_schema=Context,
+        context_schema=CustomContext,
         store=InMemoryStore()
     )
 
@@ -333,7 +344,7 @@ def system_prompt_demo():
         model='',
         tools=[...],
         middleware=[context_aware_prompt],
-        context_schema=Context
+        context_schema=CustomContext
     )
 
 # Message 消息
@@ -402,7 +413,7 @@ Reference these files when answering questions."""
         model='',
         tools=[...],
         middleware=[inject_writing_style],
-        context_schema=Context,
+        context_schema=CustomContext,
         store=InMemoryStore()
     )
 
@@ -443,7 +454,7 @@ Reference these files when answering questions."""
         model='',
         tools=[...],
         middleware=[inject_compliance_rules],
-        context_schema=Context
+        context_schema=CustomContext
     )
 
 # Tools 工具
@@ -516,7 +527,7 @@ def context_tools_demo(public_search, private_search, advanced_search,
         model='',
         tools=[search_tool, analysis_tool, export_tool],
         middleware=[store_based_tools],
-        context_schema=Context,
+        context_schema=CustomContext,
         store=InMemoryStore()
     )
 
@@ -656,7 +667,7 @@ def tool_context_write():
     @tool
     def get_preference(
             preference_key: str,
-            runtime: ToolRuntime[Context]
+            runtime: ToolRuntime[CustomContext]
     ) -> str:
         """Get user preference from Store."""
         user_id = runtime.context.user_id
@@ -674,7 +685,7 @@ def tool_context_write():
     agent = create_agent(
         model="gpt-4.1",
         tools=[get_preference],
-        context_schema=Context,
+        context_schema=CustomContext,
         store=InMemoryStore()
     )
 
@@ -786,7 +797,345 @@ async def http_transport_demo():
     response = await agent.ainvoke({
         'messages': {'role': 'user', 'content': 'what is the weather in nyc?'}})
 
-    #
+    # 2.Authentication 认证
+    auth = None  # 自定义的认证方法/类
+    client = MultiServerMCPClient(
+        {
+            "weather": {
+                "transport": "http",
+                "url": "http://localhost:8000/mcp",
+                "auth": auth,
+            }
+        }
+    )
+
+# Stdio 标准输入输出
+async def stdio_transport_demo():
+    client = MultiServerMCPClient(
+        {
+            'math': {
+                'transport': 'stdio',
+                'command': 'python',
+                'args': ['/path/to/math_server.py']
+            }
+        }
+    )
+
+
+# Stateful sessions 状态会话
+async def stateful_session_demo():
+    client = MultiServerMCPClient(
+        {}
+    )
+    async with client.session('server_name') as session:
+        tools = await load_mcp_tools(session)
+        agent = create_agent(
+            'gpt-4.1',
+            tools
+        )
+
+"""
+Core features 核心功能
+"""
+
+# Tools
+async def core_tools_demo():
+    # 1 加载工具
+    client = MultiServerMCPClient()
+    tools = await client.get_tools()
+    agent = create_agent('gpt-4.1', tools)
+    result = await agent.ainvoke(
+        {'messages': [{'role': 'user', 'content': 'Get data from the server'}]}
+    )
+    # 2 结构化内容
+    # 2.1 从工件中提取结构化内容
+    for message in result['messages']:
+        if isinstance(message, ToolMessage) and message.artifact:
+            structured_content = message.artifact['structured_content']
+
+    # 2.2 通过拦截器追加结构化内容
+    async def append_structured_content(request: MCPToolCallRequest, handler):
+        """Append structured content from artifact to tool message."""
+        result = await handler(request)
+        if result.structuredContent:
+            result.content += [
+                TextContent(type='text', text=json.dumps(result.structuredContent))
+            ]
+        return result
+    client = MultiServerMCPClient({}, tool_interceptors=[append_structured_content])
+
+    # 2.3Multimodal tool content  多模态工具内容
+    for message in result['messages']:
+        if message.type == 'tool':
+            for block in message.content_blocks:
+                if block['type'] == 'text':
+                    pass
+                elif block['type'] == 'image':
+                    pass
+# Resources 资源
+async def core_resource_demo():
+    # 加载资源
+    client = MultiServerMCPClient({})
+    blobs = await client.get_resources('server_name')
+
+    # or await client.get_resources('server_name', uris=['file:///path/to/file.txt'])
+
+    for blob in blobs:
+        print(f"URI: {blob.metadata['uri']}, MIME type: {blob.mimetype}")
+        print(blob.as_string())  # For text content
+
+    # load_mcp_resources
+
+    async with client.session('server_name') as session:
+        blobs = await load_mcp_resources(session)
+        # blobs = await load_mcp_resources(session, uris=["file:///path/to/file.txt"])
+
+# Prompts 提示词
+async def core_prompts_demo():
+    client = MultiServerMCPClient({})
+    messages = await client.get_prompt('server_name', 'summarize')
+
+    messages = await client.get_prompt(
+        'server_name',
+        'code_review',
+        arguments={'language': 'python', 'focus': 'security'}
+    )
+    for message in messages:
+        print(f'{message.type}: {message.content}')
+
+    async with client.session('server_name') as session:
+        message = await load_mcp_prompt(session, 'summarize')
+
+        message = await load_mcp_prompt(session,
+                                        'code_review',
+                                        arguments={'language': 'python', 'focus': 'security'})
+
+"""
+Advanced features 高阶功能
+"""
+
+# Tool interceptors 工具拦截器
+async def tools_interceptors_demo(get_token_for_tool):
+    # 1 访问运行时上下文
+    async def inject_user_context(
+            request: MCPToolCallRequest,
+            handler,
+    ):
+        """Inject user credentials into MCP tool calls"""
+        runtime = request.runtime
+        # 1.1 运行时上下文
+        user_id = runtime.context.user_id
+        api_key = runtime.context.api_key
+
+        # 1.2 存储
+        store = runtime.store
+        prefs = store.get(('preferences', ), user_id)
+
+        # 1.3 状态
+        state = runtime.state
+        is_authenticated = state.get('is_authenticated', False)
+        sensitive_tools = ["delete_file", "update_settings", "export_data"]
+
+        # 1.4 工具调用ID
+        tool_call_id = runtime.tool_call_id
+
+
+        if request.name in sensitive_tools and not is_authenticated:
+            return ToolMessage(
+                content='Authentication required. Please log in first.',
+                tool_call_id=tool_call_id
+            )
+
+
+        modified_request = request.override(
+            args={**request.args, 'user_id': user_id,
+                  'language': prefs.value.get('language', 'en')}
+        )
+        return await handler(modified_request)
+
+    client = MultiServerMCPClient({}, tool_interceptors=[inject_user_context])
+
+    tools = await client.get_tools()
+    agent = create_agent('gpt-4.1',
+                         tools,
+                         context_schema=CustomContext,
+                         store=InMemoryStore())  # 需要store的时候传
+
+    result = await agent.ainvoke({'messages': []})
+
+
+    # 2 状态更新和命令
+    async def handle_task_completion(
+            request: MCPToolCallRequest,
+            handler,
+    ):
+        """Mark task complete and hand off to summary agent."""
+        result = await handler(request)
+        if request.name == "submit_order":
+            return Command(
+                update={
+                    'messages': [result] if isinstance(result, ToolMessage) else [],
+                    'task_status': 'completed',
+                },
+                goto='summary_agent'
+            )
+        return result
+
+    # 3 自定义拦截器
+    async def logging_interceptor(
+            request: MCPToolCallRequest,
+            handler
+    ):
+        """Log tool calls before and after execution."""
+
+        # 3.1 基本模式
+        if request.name == "logging":
+            print(f"Calling tool: {request.name} with args: {request.args}")
+            result = await handler(request)
+            print(f"Tool {request.name} returned: {result}")
+            return result
+        # 3.2 修改请求
+        elif request.name == "modified":
+            modified_args = {k: v * 2 for k, v in request.args.items()}
+            modified_request = request.override(args=modified_args)
+            return await handler(modified_request)
+        # 3.3 在运行时修改标题
+        elif request.name == 'modify_title':
+            token = get_token_for_tool(request.name)
+            modified_request = request.override(
+                headers={"Authorization": f"Bearer {token}"}
+            )
+            return await handler(modified_request)
+
+    # 3.4 组合拦截器
+    """
+    Execution order:
+    outer: before -> inner: before -> tool execution -> inner: after -> outer: after
+    """
+    async def outer_interceptor(request, handler):
+        print("outer: before")
+        result = await handler(request)
+        print("outer: after")
+        return result
+
+    async def inner_interceptor(request, handler):
+        print("inner: before")
+        result = await handler(request)
+        print("inner: after")
+        return result
+
+    # 3.5 错误处理
+    async def retry_interceptor(
+            request: MCPToolCallRequest,
+            handler,
+            max_retries: int = 3,
+            delay: float = 1.0,
+    ):
+        """Retry failed tool calls with exponential backoff."""
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                return await handler(request)
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    wait_time = delay * (2 ** attempt)  # Exponential backoff
+                    print(f"Tool {request.name} failed (attempt {attempt + 1}), retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+        raise last_error
+
+    client = MultiServerMCPClient({}, tool_interceptors=[logging_interceptor, outer_interceptor,
+                                                         inner_interceptor, retry_interceptor])
+
+# Progress notifications 进度通知
+def progress_notifications():
+    async def on_progress(
+            progress: float,
+            total: float | None,
+            message: str | None,
+            context: CallbackContext
+    ):
+        """Handle progress updates from MCP servers."""
+        percent = (progress / total * 100) if total else progress
+        tool_info = f" ({context.tool_name})" if context.tool_name else ""
+        print(f"[{context.server_name}{tool_info}] Progress: {percent:.1f}% - {message}")
+
+    client = MultiServerMCPClient(
+        {},
+        callbacks=Callbacks(on_progress=on_progress)
+    )
+
+# 日志记录
+def log_info():
+    async def on_logging_message(
+            params: LoggingMessageNotificationParams,
+            context: CallbackContext
+    ):
+        """Handle log messages from MCP servers."""
+        print(f"[{context.server_name}] {params.level}: {params.data}")
+
+    client = MultiServerMCPClient(
+        {},
+        callbacks=Callbacks(on_logging_message=on_logging_message)
+    )
+
+# Elicitation 提取
+server = FastMCP('Profile')
+
+class UserDetails(BaseModel):
+    email: str
+    age: int
+
+def elicitation_demo():
+    # 1 服务器设置
+    @server.tool
+    async def create_profile(name: str, ctx: Context) -> str:
+        """Create a user profile, requesting details via elicitation."""
+        result = await ctx.elicit(
+            message=f"Please provide details for {name}'s profile:",
+            response_type=UserDetails,
+        )
+        if result.action == "accept" and result.data:
+            return f"Created profile for {name}: email={result.data.email}, age={result.data.age}"
+        if result.action == "decline":
+            return f"User declined. Created minimal profile for {name}."
+        return "Profile creation cancelled."
+    server.run(transport='http')
+
+    # 2 Client setup 客户端设置
+    async def on_elicitation(
+            mcp_context: RequestContext,
+            params: ElicitRequestParams,
+            context: CallbackContext
+    ) -> ElicitResult:
+        """Handle elicitation requests from MCP servers."""
+        # In a real application, you would prompt the user for input
+        # based on params.message and params.requestedSchema
+        return ElicitResult(
+            action='accept',
+            content={'email': 'user@example.com', 'age': 25}
+        )
+
+    client = MultiServerMCPClient(
+        {
+            "profile": {
+                "url": "http://localhost:8000/mcp",
+                "transport": "http",
+            }
+        },
+        callbacks=Callbacks(on_elicitation=on_elicitation),
+    )
+
+    # 3 响应操作
+    # Accept with data
+    ElicitResult(action="accept", content={"email": "user@example.com", "age": 25})
+
+    # Decline (user doesn't want to provide info)
+    ElicitResult(action="decline")
+
+    # Cancel (abort the operation)
+    ElicitResult(action="cancel")
+
 if __name__ == "__main__":
     access_demo()
 

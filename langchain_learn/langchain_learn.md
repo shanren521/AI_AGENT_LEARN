@@ -836,29 +836,92 @@ http 传输（也称为 streamable-http ）使用 HTTP 请求进行客户端-服
   + 当通过 HTTP 连接到 MCP 服务器时，您可以使用连接配置中的 headers 字段包含自定义标头（例如，用于身份验证或跟踪）。此功能支持 sse （已由 MCP 规范弃用）和 streamable_http 传输。
 + 2.Authentication 认证
   + langchain-mcp-adapters 库在底层使用官方的 MCP SDK，这允许你通过实现 httpx.Auth 接口来提供自定义的认证机制。
-+ 
 
 #### 3.4.3.2 Stdio 标准输入输出
 
+客户端以子进程方式启动服务器，并通过标准输入/输出进行通信。最适合本地工具和简单设置。
+
 ### 3.4.4 Stateful sessions 状态会话
+
+默认情况下， MultiServerMCPClient 是无状态的：每次工具调用都会创建一个新的 MCP 会话，执行工具，然后清理。
+
+如果您需要控制 MCP 会话的生命周期（例如，在与维护跨工具调用上下文的有状态服务器合作时），您可以使用 client.session() 创建一个持久的 ClientSession 。
+
 
 ### 3.4.5 核心功能
 
 #### 3.4.5.1 Tools 工具
 
+工具允许 MCP 服务器暴露可执行的函数，LLMs 可以调用这些函数来执行操作——例如查询数据库、调用 API 或与外部系统交互。LangChain 将 MCP 工具转换为 LangChain 工具，使其可以直接在任何 LangChain 代理或工作流程中使用。
+
++ 1.Loading tools 加载工具
+  + 使用 client.get_tools() 从 MCP 服务器获取工具，并将其传递给你的代理
+  + 也可以直接使用 load_mcp_tools 加载
++ 2.Structured content 结构化内容
+  + MCP 工具可以同时返回结构化内容和人类可读的文本响应。当工具需要返回机器可解析的数据（如 JSON）以及向模型展示的文本时，这很有用。
+  + 当 MCP 工具返回 structuredContent 时，适配器将其包裹在 MCPToolArtifact 中，并将其作为工具的工件返回。您可以通过 ToolMessage 上的 artifact 字段访问它。您还可以使用拦截器自动处理或转换结构化内容。
+    + 从工件中提取结构化内容: 调用您的代理后，您可以从响应中的工具消息中访问结构化内容
+    + 通过拦截器追加结构化内容:  如果你希望结构化内容在对话历史中可见（对模型可见），你可以使用拦截器自动将结构化内容追加到工具结果中
++ 3.Multimodal tool content  多模态工具内容
+  + MCP 工具可以在其响应中返回多模态内容（图像、文本等）。当 MCP 服务器返回包含多个部分的内容（例如文本和图像）时，适配器会将它们转换为 LangChain 的标准内容块。您可以通过 ToolMessage 上的 content_blocks 属性访问标准化的表示形式。
+
 #### 3.4.5.2 Resource 资源
 
+资源允许 MCP 服务器暴露数据——例如文件、数据库记录或 API 响应——这些数据可以被客户端读取。LangChain 将 MCP 资源转换为 Blob 对象，这些对象为处理文本和二进制内容提供了统一的接口。
+
++ Loading resources 加载资源
+  + 使用 client.get_resources() 从 MCP 服务器加载资源
+  + 也可以直接使用 load_mcp_resources 与会话配合，以获得更多控制权
+
 #### 3.4.5.3 Prompts 提示词
+
+提示允许 MCP 服务器展示可重用的提示模板，这些模板可以被客户端获取和使用。LangChain 将 MCP 提示转换为消息，使其易于集成到基于聊天的流程中。
+
++ Loading prompts 加载提示词
+  + 使用 client.get_prompt() 从 MCP 服务器加载提示
+  + 也可以直接使用 load_mcp_prompt 与会话配合，以获得更多控制权
 
 ### 3.4.6 Advanced features 高阶功能
 
 #### 3.4.6.1 Tool interceptors 工具拦截器
 
+MCP 服务器作为独立进程运行——它们无法访问 LangGraph 运行时信息，如存储、上下文或代理状态。拦截器通过在 MCP 工具执行期间提供对这种运行时上下文的访问来弥补这一差距。
+
+拦截器还提供类似中间件的工具调用控制：你可以修改请求、实现重试、动态添加头部或完全中断执行
+
++ 1.访问运行时上下文: 读取用户 ID、API 密钥、存储数据和代理状态
+  + 1.1 访问在调用时传递的用户特定配置，如用户 ID、API 密钥或权限
+  + 1.2 访问长期记忆以检索用户偏好或跨对话持久化数据
+  + 1.3 访问对话状态以根据当前会话做出决策
+  + 1.4 访问工具调用 ID 以返回正确格式的响应或跟踪工具执行
++ 2.状态更新和命令: 使用 Command 更新代理状态或控制图流。对于跟踪任务进度、在代理之间切换或提前结束执行很有用。
+  + 使用 Command 与 goto="__end__" 提前结束执行
++ 3.自定义拦截器: 修改请求的模式、组合拦截器以及错误处理，列表中的第一个拦截器是最外层。
+  + 3.1 Basic pattern  基本模式 : 可以在调用处理器之前修改请求，在调用之后修改响应，或者完全跳过处理器。
+  + 3.2 Modifying requests  修改请求 : 使用 request.override() 创建一个修改后的请求
+  + 3.3 在运行时修改标题: 拦截器可以根据请求上下文动态地修改 HTTP 头
+  + 3.4 Composing interceptors  组合拦截器: 多个拦截器以“洋葱”顺序组合——列表中的第一个拦截器是最外层
+  + 3.5 Error handling  错误处理: 使用拦截器捕获工具执行错误并实现重试逻辑
+
 #### 3.4.6.2 Progress notifications 进度通知
+
+订阅长时间运行的工具执行进度更新
+
+CallbackContext 提供：
++ MCP服务器的名称
++ 正在执行的工具的名称(在工具调用期间可用)
 
 #### 3.4.6.3 日志记录
 
+MCP 协议支持从服务器记录通知。使用 Callbacks 类来订阅这些事件。
+
 #### 3.4.6.4 Elicitation 提取
+
+提取允许 MCP 服务器在工具执行期间向用户请求额外输入。服务器无需提前获取所有输入，可以根据需要交互式地询问信息。
+
++ Server setup  服务器设置: 定义一个使用 ctx.elicit() 请求用户输入的工具
++ Client setup 客户端设置: 处理引出请求，通过向 MultiServerMCPClient 提供回调函数
++ Response actions  响应操作: 获取回调可以返回三种操作之一(accept\decline\cancel)
 
 
 
