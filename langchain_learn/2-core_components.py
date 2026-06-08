@@ -6,7 +6,7 @@ from langchain.agents.middleware import (wrap_model_call, ModelRequest, ModelRes
                                          SummarizationMiddleware, dynamic_prompt, after_agent, HumanInTheLoopMiddleware,
                                          PIIMiddleware, TodoListMiddleware, LLMToolSelectorMiddleware, ToolRetryMiddleware,
                                          LLMToolEmulator, ClearToolUsesEdit, ContextEditingMiddleware, ShellToolMiddleware,
-                                         HostExecutionPolicy, FilesystemFileSearchMiddleware)
+                                         HostExecutionPolicy, FilesystemFileSearchMiddleware, AgentMiddleware)
 from langchain.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage, AIMessageChunk, AnyMessage
 from langgraph.types import Command, Interrupt
 from typing import Any, TypedDict, Literal, Union

@@ -2,6 +2,13 @@
 
 # 1 核心组件
 
++ model I/O
++ memory
++ agent
++ rag
++ chain
++ callback
+
 ## 1.1 Agents
 
 智能体将语言模型与工具相结合，创建能够对任务进行推理、决定使用哪些工具并迭代地寻求解决方案的系统。

@@ -1,6 +1,5 @@
 from langchain.agents import create_agent, AgentState
-from langchain.agents.middleware import (ModelCallLimitMiddleware, ToolCallLimitMiddleware, ModelFallbackMiddleware,
-                                         PIIMiddleware)
+from langchain.agents.middleware import (ModelCallLimitMiddleware, ToolCallLimitMiddleware, ModelFallbackMiddleware)
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 from langgraph.graph.state import StateGraph
