@@ -4,6 +4,7 @@ from typing import TypedDict, Annotated
 
 from langchain.agents import create_agent
 from langchain_core.messages import AnyMessage, HumanMessage, AIMessage
+from langchain_core.prompts import ChatPromptTemplate
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.config import get_stream_writer
@@ -11,7 +12,10 @@ from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 import os
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_community.embeddings import DashScopeEmbeddings
+from langchain_redis import RedisConfig, RedisVectorStore
 
+redis_url = "redis://localhost:6379"
 
 load_dotenv()
 
@@ -115,7 +119,32 @@ def couplet_node(state: State):
     print(">>> Couplet Node")
     writer = get_stream_writer()
     writer({"node", ">>> Couplet Node"})
-    return {"messages": [HumanMessage(content="couplet_node")], "type": "couplet"}
+    couplet_template = ChatPromptTemplate.from_messages([
+        ("system", """
+        你是一个对联大师，你的任务是根据用户给出的上联，设计出一个下联。
+        回答时，可以参考下面的对联：
+        {samples}
+        请用中文回答问题
+        """),
+        ("user", "{user_input}")
+    ])
+
+    query = state["messages"][0]
+    embedding_model = DashScopeEmbeddings(model="text-embedding-v3")
+    config = RedisConfig(
+        index_name="couplet",
+        redis_url=redis_url
+    )
+    vector_store = RedisVectorStore(embedding_model, config=config)
+    template_samples = []
+    scored_results = vector_store.similarity_search_with_score(query, k=3)
+    for doc, score in scored_results:
+        template_samples.append(doc.page_content)
+    prompt = couplet_template.invoke({"samples": template_samples, "user_input": query})
+    writer({"couplet_prompt": f"{prompt}"})
+    response = llm.invoke(prompt)
+    writer({"couplet_result": f"{response.content}"})
+    return {"messages": [HumanMessage(content=response.content)], "type": "couplet"}
 
 def routing_func(state: State):
     node_type = state["type"]
